@@ -18,6 +18,8 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.TimeUnit;
 
+import javax.management.monitor.Monitor;
+
 public class Client {
 	//心跳标志/活跃状态
 	private static final String ALIVE = "_ALIVE_";
@@ -39,58 +41,85 @@ public class Client {
 	}
 
 	public void connect(){
-		new Thread() {
-			public void run() {
-				while(true){
-//					System.out.println(serverState);
-					if(DEAD.equals(serverState) && socket == null) {
-						try {
-							socket = new Socket();
-							socket.connect(new InetSocketAddress(ip, port), 10000);
-							serverState = ALIVE;
-							System.out.println("连接成功");
-						} catch (IOException e) {
-							System.out.println("连接超时");
-						}
-					}
-				}
-			}
-		}.start();
+		try {
+			socket = new Socket();
+			socket.connect(new InetSocketAddress(ip, port), 10000);
+			socket.setSoTimeout(60000);
+			serverState = ALIVE;
+			System.out.println("连接成功");
+		} catch (IOException e) {
+			System.out.println("连接超时");
+		}
+	}
+	
+	public synchronized String getServerState() {
+		return serverState;
 	}
 	public void start(){
 		//启动接受线程
 		receiveMessage();
 		//启动发送线程
-//		sendMessage();
+		sendMessage();
+		
+		monitor();
+		
+	}
+
+	/**
+	 * 监控服务器是否断开，断开则重连
+	 */
+	private void monitor() {
+		new Thread() {
+			public void run() {
+				while(ALIVE.equals(clientState)) {
+					if(DEAD.equals(getServerState())) {
+						System.out.println("正在重新连接");
+						try {
+							TimeUnit.SECONDS.sleep(2);
+							connect();
+							if(ALIVE.equals(getServerState())) {
+								receiveMessage();
+								sendMessage();
+							}
+						} catch (InterruptedException e) {
+							e.printStackTrace();
+						}
+					}	
+				}
+			}
+		}.start();
 	}
 
 	private void receiveMessage() {
 		new Thread("receiveMessage"){
 			public void run() {
 				BufferedReader br=null;
-				while(true){
 					try {
-						if(socket !=null && DEAD.equals(serverState)) {
-							br = new BufferedReader(new InputStreamReader(socket.getInputStream(),"utf-8"));
-						}else {
-							continue;
-						}
-						String message = null;
-						socket.setSoTimeout(10000);
-						message = br.readLine();
-						if(!"_OK_".equals(message)){
-							System.out.println(message);
+						br = new BufferedReader(new InputStreamReader(socket.getInputStream(),"utf-8"));
+						while(true) {
+							if(ALIVE.equals(getServerState())) {
+								String message = null;
+								message = br.readLine();
+//								System.out.println(message);
+								if("clientClosed-OK".equals(message)) {
+									clientState = DEAD;
+									return ;
+								}
+								if(!"_OK_".equals(message)){
+									System.out.println(message);
+								}
+							}
 						}
 					} catch (UnsupportedEncodingException e) {
 						e.printStackTrace();
 					} catch(SocketException e){
+						serverState = DEAD;
 						System.out.println("服务器已关闭");
 					}catch(SocketTimeoutException e){
 						System.out.println("读取超时！");
 					}catch (IOException e) {
 						e.printStackTrace();
 					}finally{
-						serverState = DEAD;
 						try {
 							if(br!=null){
 								br.close();
@@ -99,7 +128,6 @@ public class Client {
 							e.printStackTrace();
 						}
 					}
-				}
 			}
 		}.start();
 	}
@@ -111,32 +139,36 @@ public class Client {
 				Scanner scanner = null;
 				PrintWriter pw = null;
 				Thread aliveThread;
-				aliveThread = alive(pw);
-				while(ALIVE.equals(serverState)){
 					try {
-						if(pw == null) {
-							pw = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(),"UTF-8"));
+						pw = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(),"UTF-8"));
+						aliveThread = alive(pw);
+						while(true){
+							if(ALIVE.equals(getServerState())) {
+								System.out.print("请输入想发送的信息：");
+								scanner = new Scanner(System.in);
+								String message = scanner.nextLine();
+								pw.println(message);
+								pw.flush();
+								if("bye".equals(message)) {
+									clientState = DEAD;
+									aliveThread.interrupt();
+									break;
+								}
+							}
+							System.out.println("执行完毕");
 						}
-						System.out.print("请输入想发送的信息：");
-						scanner = new Scanner(System.in);
-						String message = scanner.nextLine();
-						pw.println(message);
-						pw.flush();
-						if("bye".equals(message)) {
-							clientState = DEAD;
-							aliveThread.interrupt();
-							break;
-						}
-						System.out.println("执行完毕");
 					} catch (UnknownHostException e) {
 						e.printStackTrace();
 					} catch (IOException e) {
 						e.printStackTrace();
 					}finally{
-						scanner.close();
-						pw.close();
+						if(scanner!=null) {
+							scanner.close();
+						}
+						if(pw!=null) {
+							pw.close();
+						}
 					}
-				}
 			}
 		}.start();;
 	}

@@ -132,6 +132,8 @@ public class Server {
 						pw.flush();
 					}else if("bye".equals(message)){
 						//正常退出
+						pw.println("clientClosed-OK");
+						pw.flush();
 						System.out.println(hostName+"说："+message);
 						break;
 					}else{
